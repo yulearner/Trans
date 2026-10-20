@@ -16,7 +16,7 @@ Chrome / Edge Manifest V3 浏览器扩展：使用用户自行配置的 OpenAI �
 1. 下载并解压项目 ZIP。
 2. Chrome 打开 `chrome://extensions/`，Edge 打开 `edge://extensions/`。
 3. 打开“开发者模式”。
-4. 点击“加载已解压的扩展程序”，选择本项目的 `linguaflow-ai` 文件夹（即包含 `manifest.json` 的目录）。
+4. 点击“加载已解压的扩展程序”，选择本仓库的根目录（即包含 `manifest.json` 的目录）。
 5. 点击扩展图标，打开“翻译设置”。
 6. 填写 API Base URL（例如 `https://api.openai.com/v1`）、API Key 和模型名称，保存。
 7. 点击“授权 API 域名”，在浏览器权限提示中确认。
@@ -42,7 +42,7 @@ Chrome / Edge Manifest V3 浏览器扩展：使用用户自行配置的 OpenAI �
 ## 目录结构
 
 ```text
-linguaflow-ai/
+.
 ├── manifest.json
 ├── README.md
 ├── src/
