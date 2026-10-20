@@ -1,4 +1,10 @@
+// Google 免费翻译引擎实现在独立文件中，通过 importScripts 引入：
+// 引擎选择只在下方 translateText 分发层处理，Google 的请求与响应解析逻辑
+// 不会散落到 content.js / popup / options 等文件中。
+importScripts("engines/google.js");
+
 const DEFAULTS = {
+  engine: "google",
   baseUrl: "https://api.openai.com/v1",
   apiKey: "",
   model: "gpt-4o-mini",
@@ -19,11 +25,31 @@ function normalizeBaseUrl(value) {
 }
 
 async function getSettings() {
-  return { ...DEFAULTS, ...(await chrome.storage.local.get(DEFAULTS)) };
+  const stored = await chrome.storage.local.get(DEFAULTS);
+  const settings = { ...DEFAULTS, ...stored };
+  // 引擎默认值：从未显式选择过引擎、但已保存过 API Key 的老用户保持 AI 引擎，
+  // 避免本次升级擅自改变现有用户的翻译引擎；全新用户默认 Google 免费翻译。
+  const explicitEngine = (await chrome.storage.local.get("engine")).engine;
+  if (explicitEngine === undefined && String(stored.apiKey || "").trim()) settings.engine = "ai";
+  return settings;
 }
 
+// 统一翻译分发层：引擎选择只在这里处理。Google 与 AI 的错误处理相互独立，
+// 任一引擎失败都直接把错误返回给调用方，不会静默回退到另一个引擎，
+// 同一段文本也只会调用当前选中的那一个引擎。
 async function translateText(texts, extra = {}) {
   const settings = await getSettings();
+  if (settings.engine === "google") {
+    return googleTranslate(texts, {
+      sourceLang: extra.sourceLang ?? settings.sourceLang,
+      targetLang: extra.targetLang ?? settings.targetLang
+    });
+  }
+  return aiTranslate(texts, extra, settings);
+}
+
+// 引擎 B：AI 大模型翻译（OpenAI 兼容 Chat Completions，原有实现，逻辑未变）。
+async function aiTranslate(texts, extra = {}, settings) {
   if (!settings.apiKey.trim()) throw new Error("尚未配置 API Key。请打开扩展设置填写密钥。");
   if (!settings.model.trim()) throw new Error("请填写模型名称。");
   const baseUrl = normalizeBaseUrl(settings.baseUrl);
@@ -125,7 +151,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message?.type === "LF_GET_SETTINGS_STATUS") {
-    getSettings().then(s => sendResponse({ configured: Boolean(s.apiKey && s.model && s.baseUrl) }));
+    getSettings().then(s => sendResponse({
+      engine: s.engine,
+      configured: s.engine === "google" ? true : Boolean(s.apiKey && s.model && s.baseUrl)
+    }));
     return true;
   }
 });

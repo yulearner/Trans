@@ -1,9 +1,11 @@
-# LinguaFlow AI（MVP 0.1.0）
+# LinguaFlow AI（MVP 0.2.0）
 
-Chrome / Edge Manifest V3 浏览器扩展：使用用户自行配置的 OpenAI 兼容 Chat Completions API 做网页双语翻译、选中文本翻译和段落悬停翻译。
+Chrome / Edge Manifest V3 浏览器扩展：支持两种可随时切换的翻译引擎——Google 免费翻译（无需 API Key，基于 Google 网页版翻译的非官方接口）与用户自行配置的 OpenAI 兼容 Chat Completions API——做网页双语翻译、选中文本翻译和段落悬停翻译。
 
 ## 当前功能
 
+- 两种并列可切换的翻译引擎：Google 免费翻译（无需 API Key）与 AI 大模型翻译（自定义 OpenAI 兼容 API）；可在设置页或 Popup 中切换，选择持久保存，切换失败时明确报错、不静默回退。
+- Google 引擎使用 translate.googleapis.com 的非官方网页接口（不是 Google 官方 API），可能变化、限流或停止服务；只发送待翻译文本与语言参数，不携带 AI API Key。
 - 一键翻译当前网页正文段落，译文显示在原文下方；列表项与表格单元格的译文追加在条目内部末尾，以避免破坏列表和表格结构。
 - 显示 / 隐藏已插入的译文。
 - 选中网页文本后弹出翻译浮层。
@@ -17,11 +19,18 @@ Chrome / Edge Manifest V3 浏览器扩展：使用用户自行配置的 OpenAI �
 2. Chrome 打开 `chrome://extensions/`，Edge 打开 `edge://extensions/`。
 3. 打开“开发者模式”。
 4. 点击“加载已解压的扩展程序”，选择本仓库的根目录（即包含 `manifest.json` 的目录）。
-5. 点击扩展图标，打开“翻译设置”。
-6. 填写 API Base URL（例如 `https://api.openai.com/v1`）、API Key 和模型名称，保存。
-7. 点击“授权 API 域名”，在浏览器权限提示中确认。
-8. 点击“测试 API”，确认返回译文。
+5. 点击扩展图标，打开“翻译设置”，选择默认翻译引擎。
+6. Google 免费翻译：无需任何配置，保存后可直接使用；如遇网络失败可点击“授权 Google 翻译域名”后重试。
+7. AI 大模型翻译：填写 API Base URL（例如 `https://api.openai.com/v1`）、API Key 和模型名称，保存；点击“授权 API 域名”，在浏览器权限提示中确认。
+8. 点击“测试翻译”，确认返回译文。
 9. 打开普通 HTTP/HTTPS 网页，点击扩展图标并选择“翻译当前网页”。
+
+## 翻译引擎说明
+
+- **Google 免费翻译**：调用 `https://translate.googleapis.com/translate_a/single`（`client=gtx`）非官方网页接口；目标语言使用设置中的目标语言（默认简体中文），源语言支持自动检测。该接口不是 Google 官方公开 API，不承诺配额或稳定性，可能变化、限流（HTTP 429）或停止服务；失败时明确报错，不伪造结果，也不静默回退到 AI 引擎。长文本按约 1200 字符分段（优先在换行/句末切分），最多 2 个并发请求，网络错误 / 429 / 5xx 仅自动重试一次。
+- **AI 大模型翻译**：沿用原有 [OI] 兼容 Chat Completions 实现，配置方式完全不变；选择 Google 引擎时不会调用 AI API。
+- 引擎选择保存在 `chrome.storage.local`；从未选择过引擎但已保存过 API Key 的老用户默认保持 AI 引擎，全新用户默认 Google。
+- 切换引擎后，已插入页面的译文不会自动重译，也不会重复插入；刷新页面或翻译新内容时使用当前引擎。同一段文本只调用当前选中的引擎。
 
 ## API 设置说明
 
@@ -32,6 +41,8 @@ Chrome / Edge Manifest V3 浏览器扩展：使用用户自行配置的 OpenAI �
 
 ## 安全与隐私
 
+- Google 模式下，待翻译文本会发送到 Google 的服务端（translate.googleapis.com）；该请求不携带 AI API Key 或任何凭据。AI 模式下文本只发送给你配置的 API 服务，不会发送到 Google。
+- Google 引擎使用非官方网页接口，本项目不将其宣传为 Google 官方免费 API，也不承诺其稳定性、配额或永久可用性。
 - API Key 保存在 `chrome.storage.local` 中；本地存储不是硬件密钥库。拥有本机账户访问权或扩展调试权限的人可能有机会读取它。
 - 翻译文本会发送到用户填写的 API 服务。不要翻译密码、令牌、私密邮件或其他敏感内容。
 - 扩展只在用户触发翻译时发送文本，不自动上传浏览历史。
@@ -46,18 +57,24 @@ Chrome / Edge Manifest V3 浏览器扩展：使用用户自行配置的 OpenAI �
 ├── manifest.json
 ├── README.md
 ├── src/
-│   ├── background.js   # API 请求、提示词、结果校验
+│   ├── background.js   # 引擎分发层 + AI（[OI] 兼容）请求、提示词、结果校验
+│   ├── engines/
+│   │   └── google.js   # Google 免费翻译引擎（非官方网页接口）
 │   ├── content.js     # 网页段落识别、双语展示、选中/悬停交互
 │   ├── content.css    # 网页翻译样式
 │   ├── popup.html/js   # 扩展弹出面板
 │   ├── options.html/js # API 配置、域名授权、API 测试
 │   └── ui.css
 └── tests/
-    └── manual-test-plan.md
+    ├── manual-test-plan.md
+    └── google-engine.test.js  # Google 引擎离线单元测试（node tests/google-engine.test.js）
 ```
 
 ## 已知限制
 
+- Google 引擎依赖 Google 网页版翻译的非官方接口，可能变化、限流（HTTP 429）或停止服务；不支持翻译风格、术语表等 AI 引擎能力，超长段落按约 1200 字符分块翻译，分块边界可能影响句间衔接。
+- Google 引擎对每个段落单独发起请求，超长网页会触发较多请求，可能被限流；被限流时会提示稍后重试。
+- 切换引擎不会自动重译已显示的译文，也不会删除它们；刷新页面后重新翻译即可。
 - 暂不支持浏览器内部页面（`chrome://`、`edge://`）、Chrome Web Store 页面、PDF 内置查看器、跨域 iframe、部分特殊网页应用。
 - 网页识别采用通用 DOM 规则，不保证覆盖每个网站；正文中较长的列表项也可能被识别。
 - 页面翻译逐批处理，每批最多 8 段，单次消息最多 20 段；超长网页会多次请求，可能产生 API 费用。

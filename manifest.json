@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "LinguaFlow AI - 双语翻译",
-  "version": "0.1.0",
-  "description": "个人使用的 AI 网页双语翻译，支持自定义 OpenAI 兼容 API。",
+  "version": "0.2.0",
+  "description": "个人使用的网页双语翻译：Google 免费翻译 + 自定义 OpenAI 兼容 AI API。",
   "minimum_chrome_version": "111",
   "permissions": ["activeTab", "scripting", "storage"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
