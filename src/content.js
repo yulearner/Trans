@@ -9,7 +9,7 @@
   let selectionTimer;
   let selectionSeq = 0;
   let pageTranslationPromise = null;
-  const lfUiSelector = '[data-lf-ui="hover-button"], [data-lf-ui="tooltip"]';
+  const lfUiSelector = '[data-lf-ui="hover-button"], [data-lf-ui="tooltip"], [data-lf-ui="pin-badge"]';
 
   const excluded = new Set(['SCRIPT','STYLE','NOSCRIPT','TEXTAREA','INPUT','BUTTON','SELECT','OPTION','CODE','PRE','SVG','CANVAS','IFRAME']);
   // Read paragraph text while ignoring our own injected UI nodes: translations of
@@ -80,10 +80,14 @@
     translated.set(el, { text: paragraphText(el), translation });
   }
   function sendTranslation(texts) {
+    // 扩展在 chrome://extensions 被重新加载/更新后，旧页面上残留的 content script
+    // 会持有失效的 chrome.runtime（context invalidated）。此时刷新页面即可恢复；
+    // 这里检测后返回友好错误，而不是抛出未捕获的异常。
+    if (!chrome.runtime?.id) return Promise.resolve({ ok: false, error: '扩展已更新或重新加载，请刷新本页面后重试。' });
     return new Promise(resolve => chrome.runtime.sendMessage({ type: 'LF_TRANSLATE', texts }, response => {
       if (chrome.runtime.lastError) return resolve({ ok: false, error: chrome.runtime.lastError.message });
       resolve(response || { ok: false, error: '没有收到翻译服务响应。' });
-    }));
+    })).catch(() => Promise.resolve({ ok: false, error: '扩展已更新或重新加载，请刷新本页面后重试。' }));
   }
   async function translatePage() {
     // Serialize page translations so repeated clicks cannot trigger duplicate API requests.
@@ -118,25 +122,76 @@
     document.querySelectorAll('.lf-translation').forEach(node => node.hidden = !translationsVisible);
     return translationsVisible;
   }
+  const selectionCache = new Map(); // 选区译文缓存：相同文本直接显示之前的翻译，不再重复请求（仅本次页面会话内存，不持久化）
+  const pinnedTips = new Set(); // 当前处于“固定”状态的浮层；外部点击 / Escape 时统一收起为“文A”小方框
+  // 固定浮层被自动隐藏后，在原选区旁显示一个“文A”小方框；点击它重新展开之前的译文。
+  function showPinBadge(tip) {
+    if (!tip._badge) {
+      const badge = document.createElement('button');
+      badge.type = 'button'; badge.className = 'lf-pin-badge'; badge.textContent = '文A';
+      badge.title = '查看之前固定的译文'; badge.setAttribute('data-lf-ui', 'pin-badge');
+      badge.addEventListener('click', event => {
+        event.preventDefault(); event.stopPropagation();
+        badge.hidden = true;
+        tip.hidden = false; // 重新展示之前缓存的译文文本
+      });
+      document.documentElement.appendChild(badge); tip._badge = badge;
+    }
+    const a = tip._anchor || { x: window.scrollX + 16, y: window.scrollY + 16 };
+    tip._badge.style.left = `${Math.max(4, Math.min(a.x, window.scrollX + window.innerWidth - 30))}px`;
+    tip._badge.style.top = `${Math.max(window.scrollY + 4, a.y)}px`;
+    tip._badge.hidden = false;
+  }
+  // 统一的“收起浮层”：普通浮层直接隐藏；固定浮层隐藏的同时在原选区旁留下“文A”小方框。
+  function dismissTooltip(tip) {
+    if (!tip) return;
+    tip.hidden = true;
+    if (tip.dataset.pinned) showPinBadge(tip);
+  }
+  // 收起当前所有可见的浮层（普通浮层 + 固定浮层），用于“点击浮层外部”和 Escape。
+  function dismissAllTooltips() {
+    dismissTooltip(tooltip);
+    pinnedTips.forEach(tip => { if (tip.isConnected && !tip.hidden) dismissTooltip(tip); });
+  }
   function makeTooltip() {
     if (tooltip) return tooltip;
-    tooltip = document.createElement('div'); tooltip.className = 'lf-selection-tooltip'; tooltip.setAttribute('data-lf-ui','tooltip'); tooltip.hidden = true;
+    const tip = document.createElement('div'); tip.className = 'lf-selection-tooltip'; tip.setAttribute('data-lf-ui','tooltip'); tip.hidden = true;
     const label = document.createElement('div'); label.className = 'lf-tooltip-label'; label.textContent = 'LinguaFlow AI';
     const content = document.createElement('div'); content.className = 'lf-tooltip-content'; content.textContent = '正在翻译…';
-    const close = document.createElement('button'); close.type = 'button'; close.textContent = '×'; close.setAttribute('aria-label','关闭'); close.addEventListener('click', () => tooltip.hidden = true);
-    tooltip.append(label, close, content); tooltip._content = content; document.documentElement.appendChild(tooltip); return tooltip;
+    const pin = document.createElement('button'); pin.type = 'button'; pin.className = 'lf-tooltip-pin'; pin.textContent = '📌'; pin.setAttribute('aria-label','固定浮层'); pin.title = '固定：点击页面其他位置时浮层收起，但在原文旁保留“文A”小方框，点击它即可重新查看之前的译文；再次选中相同文本也会直接显示之前的翻译。';
+    pin.addEventListener('click', () => {
+      if (tip.dataset.pinned) { // 再点一次 = 取消固定，移除小方框
+        tip.dataset.pinned = ''; tip.classList.remove('lf-pinned'); pin.textContent = '📌'; pin.setAttribute('aria-label','固定浮层');
+        pinnedTips.delete(tip);
+        if (tip._badge) tip._badge.remove(); tip._badge = null;
+        if (!tooltip) tooltip = tip; // 没有其他浮层时复用它
+        return;
+      }
+      tip.dataset.pinned = '1'; tip.classList.add('lf-pinned'); pin.textContent = '📍'; pin.setAttribute('aria-label','取消固定');
+      pinnedTips.add(tip);
+      if (tooltip === tip) tooltip = null;
+    });
+    const close = document.createElement('button'); close.type = 'button'; close.textContent = '×'; close.setAttribute('aria-label','关闭');
+    close.addEventListener('click', () => { tip.remove(); pinnedTips.delete(tip); if (tip._badge) tip._badge.remove(); if (tooltip === tip) tooltip = null; });
+    tip.append(label, pin, close, content); tip._content = content;
+    document.documentElement.appendChild(tip); tooltip = tip; return tooltip;
   }
   async function translateSelection() {
     const seq = ++selectionSeq;
     const selection = window.getSelection(); const text = selection?.toString().trim();
     if (!text || text.length > 1800) return;
     const rect = selection.rangeCount ? selection.getRangeAt(0).getBoundingClientRect() : null;
+    dismissTooltip(tooltip); // 收起上一个浮层（固定浮层收起后在原处留下“文A”小方框）
     const tip = makeTooltip(); tip.hidden = false; tip._content.textContent = '正在翻译…';
+    tip._anchor = { x: (rect?.right || 8) + window.scrollX + 4, y: (rect?.top || 8) + window.scrollY + 2 }; // “文A”小方框的定位锚点
     tip.style.left = `${Math.max(8, Math.min((rect?.left || 8), window.innerWidth - 330))}px`;
     tip.style.top = `${Math.max(8, Math.min((rect?.bottom || 8) + window.scrollY + 8, window.scrollY + window.innerHeight - 160))}px`;
+    const cached = selectionCache.get(text);
+    if (cached !== undefined) { tip._content.textContent = cached; return; }
     const response = await sendTranslation([text]);
     if (!tip.isConnected || tip.hidden || seq !== selectionSeq) return;
-    tip._content.textContent = response.ok ? response.translations[0] : `翻译失败：${response.error}`;
+    if (response.ok) { selectionCache.set(text, response.translations[0]); tip._content.textContent = response.translations[0]; }
+    else tip._content.textContent = `翻译失败：${response.error}`;
   }
   function makeHoverButton() {
     if (hoverButton) return hoverButton;
@@ -171,11 +226,12 @@
     clearTimeout(selectionTimer); selectionTimer = setTimeout(() => {
       const text = window.getSelection()?.toString().trim();
       if (text) translateSelection();
-      // Clearing the selection by clicking elsewhere should also dismiss the tooltip.
-      else if (tooltip) tooltip.hidden = true;
+      // Clearing the selection by clicking elsewhere should also dismiss the tooltip;
+      // pinned tooltips collapse to a small "文A" badge next to the original text.
+      else dismissAllTooltips();
     }, 350);
   });
-  document.addEventListener('keydown', event => { if (event.key === 'Escape' && tooltip) tooltip.hidden = true; });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') dismissAllTooltips(); });
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === 'LF_TRANSLATE_PAGE') {
       translatePage()
